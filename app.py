@@ -10,6 +10,7 @@ from utils.game_stats import get_all_character_stats, get_next_character
 from components.character_card import CharacterCard
 from components.match_row import MatchRow
 from components.game_preview import GamePreview
+from components.character_winrates import CharacterWinRates
 
 app = Dash(
     external_stylesheets=[dbc.themes.BOOTSTRAP, 'style.css']
@@ -85,6 +86,14 @@ app.layout = html.Div([
             justify="center",
             id='last-5-games'
         ),
+        dbc.Row([
+            dbc.Col(
+                CharacterWinRates(results_df, "Piers").component(), id="p-char-stats"
+            ),
+            dbc.Col(
+                CharacterWinRates(results_df, "Rory").component(), id="r-char-stats",
+            )]
+        )
     ])
 ])
 
@@ -94,6 +103,8 @@ app.layout = html.Div([
     Output("r_char_card", "children"),
     Output("last-5-games", "children"),
     Output("up-next", "children"),
+    Output("p-char-stats", "children"),
+    Output("r-char-stats", "children"),
     Input("save-result-btn", 'n_clicks'),
     State("Piers-finalstocks", "value"),
     State("Rory-finalstocks", "value"),
@@ -124,7 +135,7 @@ def save_match(n, piers_stocks, rory_stocks, p_char, r_char):
         r_char = CharacterCard(next_characters["Rory"], results_df, "Rory", False).component()
         last_games = dbc.Col(MatchRow(results_df.tail(5), "Last 5 Games").component(), width=9)
 
-    return not valid, p_char, r_char, last_games, up_next(results_df)
+    return not valid, p_char, r_char, last_games, up_next(results_df), CharacterWinRates(results_df, "Piers").component(), CharacterWinRates(results_df, "Rory").component()
 
 if __name__ == '__main__':
     app.run_server(debug=True)

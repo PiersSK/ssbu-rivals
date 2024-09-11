@@ -49,7 +49,7 @@ class CharacterCard():
                 dbc.Col(
                     dbc.Card([
                         dbc.CardHeader("Win Rate"),
-                        dbc.CardBody(f"{round(self.stats['Win Rate'].iloc[0],2)}%")
+                        dbc.CardBody(f"{int(self.stats['Win Rate'].iloc[0])}%")
                     ])
                 ),
                 dbc.Col(
