@@ -34,7 +34,6 @@ def get_character_stats(results, character, player):
     return df 
 
 def get_next_character(seed, df, player, weight=True):
-    print(seed)
     random.seed(seed)
     weights = df['RandWeight'].values
     n = random.choices(range(0, df.shape[0]), weights=weights, k=1)[0] if weight else random.randrange(0, df.shape[0])
