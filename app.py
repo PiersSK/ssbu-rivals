@@ -1,180 +1,105 @@
-import streamlit as st
-import gspread
-import pandas as pd
-import numpy as np
-import random
+from dash import Dash, html, dcc
+import dash_bootstrap_components as dbc
+from dash.dependencies import Input, Output, State
+
 from datetime import datetime
-from gspread_dataframe import get_as_dataframe, set_with_dataframe
-from oauth2client.service_account import ServiceAccountCredentials
+import pandas as pd
 
-scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-creds = ServiceAccountCredentials.from_json_keyfile_name('ashborn-ff-48ba96983ef1.json', scope)
-google_client = gspread.authorize(creds)
+from utils.google_sheets import get_ssbu_results, save_results
+from utils.game_stats import get_all_character_stats, get_next_character
+from components.character_card import CharacterCard
+from components.match_row import MatchRow
 
-if 'current_player' not in st.session_state.keys(): st.session_state['current_player'] = None
-
-def get_ssbu_results():
-    sheet = google_client.open("SSBU Results").sheet1
-    df = get_as_dataframe(sheet)
-    st.session_state.seed = df.shape[0]
-    random.seed(df.shape[0])
-
-    df = df[['Piers Character', 'Rory Character', 'Piers Stocks', 'Rory Stocks', 'Date Played']].copy()
-    df['Winner'] = df['Piers Stocks'].apply(lambda x: 'Piers' if x > 0 else 'Rory')
-    df = df[df['Piers Stocks'] >= 0]
-
-    st.session_state['current_player'] = None
-    st.session_state['raw_df'] = df
-
-
-def get_overall_winrates():
-    df = st.session_state['raw_df']
-    return pd.DataFrame({
-        'Piers': [df[df['Winner'] == 'Piers'].shape[0] / df.shape[0]],
-        'Rory': [df[df['Winner'] == 'Rory'].shape[0] / df.shape[0]]
-    })
-
-def get_player_character_stats(df, player):
-    df['was_win'] = df['Winner'].apply(lambda x: 1 if x == player else 0)
-
-    df = df.groupby(f'{player} Character').agg({'was_win': lambda x: x.sum(), 'Piers Stocks': lambda x: x.count()}).reset_index()
-    df['Win Rate'] = df['was_win']/df['Piers Stocks']*100
-    df['Games Played'] = df['Piers Stocks'].apply(lambda x: float(x))
-
-    df['ImageUrl'] = df[f'{player} Character'].apply(lambda x: f'portraits/{x}.png')
-
-
-    df['RandWeight'] = df['Games Played'].apply(lambda x: 1/(1+x))
-
-    return df                     
-
-with st.form("Get/Refresh Data"):
-    st.write("Get data from the spreadsheet")
-    st.form_submit_button("Get Data", on_click=get_ssbu_results())
-
-results_df = st.session_state['raw_df']
-
-st.title("SSBU Results Explorer")
-
-st.subheader("Last 5 Games")
-st.dataframe(results_df.tail(5), use_container_width=True)
-
-st.subheader("Overall Win Rates")
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader(f"Piers: {round(get_overall_winrates()['Piers'].iloc[0]*100,2)}%")
-with col2:
-    st.subheader(f"Rory: {round(get_overall_winrates()['Rory'].iloc[0]*100,2)}%")
-
-st.bar_chart(get_overall_winrates(), horizontal=True, stack=True)
-
-
-st.subheader("Player Character Win Rates")
-player = st.selectbox('Player', ['Piers', 'Rory'])
-if player != st.session_state['current_player']:
-    st.session_state['current_player'] = player
-    st.session_state['character_df'] = get_player_character_stats(results_df, player)
-
-st.dataframe(
-    st.session_state['character_df'][[f'{player} Character', 'Win Rate', 'Games Played']],
-    column_config={
-        f"{player} Character": "Character Played",
-        "Win Rate": st.column_config.ProgressColumn('Win Rate', format="%.1f%%", min_value=0, max_value=100),
-        "Games Played": st.column_config.ProgressColumn('Games Played', format= "%.0f", min_value=0, max_value=st.session_state['character_df']['Games Played'].max()),
-    },
-    hide_index=True, 
-    use_container_width=True   
+app = Dash(
+    external_stylesheets=[dbc.themes.BOOTSTRAP, 'style.css']
 )
 
-def character_block(player, left=True):
-    games_df = st.session_state['raw_df'].copy()
-    games_df['Win'] = games_df['Winner'].apply(lambda x: 'W' if x == player else 'L')
-    df = get_player_character_stats(games_df, player)
-    char = get_rand_char(player, df)
-    wr = round(df[df[f'{player} Character'] == char]['Win Rate'].iloc[0],1)
-    gp = df[df[f'{player} Character'] == char]['Games Played'].iloc[0]
+results_df = get_ssbu_results()
+next_characters = {
+    "Piers": "",
+    "Rory": ""
+}
+for player in next_characters.keys():
+    char_df = get_all_character_stats(results_df, player)
+    next_characters[player] = get_next_character(results_df.shape[0], char_df, player)
 
-    last_5 = games_df[games_df[f'{player} Character'] == char]['Win'].tail(5).values.tolist()
-    if len(last_5) < 5:
-        last_5 = ['-' for i in range(0,(5-len(last_5)))] + last_5
+past_games = results_df[(results_df['Piers Character'] == next_characters["Piers"]) & (results_df['Rory Character'] == next_characters["Rory"])]
+last_5 = results_df.tail(5)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if left:
-            st.subheader(char)
-            st.image(f"portraits/{char}.png")
-        else: 
-            st.write(f"Win Rate: {wr}%")
-            st.write(f"Games Played: {int(gp)}")
-            st.write(f"Last 5: {' '.join(last_5)}")
-    with col2:
-        if left:
-            st.write(f"Win Rate: {wr}%")
-            st.write(f"Games Played: {int(gp)}")
-            st.write(f"Last 5: {' '.join(last_5)}")
-        else:
-            st.subheader(char)
-            st.image(f"portraits/{char}.png")
-    
-    return char
+app.layout = html.Div([
+    html.H1('SSBU Rivals'),
+    dbc.Row([
+        dbc.Col(html.H1("Piers", className="character-title"), width=5),
+        dbc.Col(html.H1("VS", className="character-title"), width=2),
+        dbc.Col(html.H1("Rory", className="character-title"), width=5)
+    ]),
+    dbc.Row([
+        dbc.Col(html.Div(CharacterCard(next_characters["Piers"], results_df, "Piers").component(), id='p_char_card')),
+        dbc.Col(html.Div(CharacterCard(next_characters["Rory"], results_df, "Rory", False).component(), id='r_char_card'))
+    ]),
+    dbc.Row(
+        dbc.Col(MatchRow(past_games, "Past Matchup Games").component(), width=9),
+        justify="center"
+    ),
+    dbc.Alert(
+        "Game not saved! Make sure at least one player has 0 stocks and the other has 1 or more!",
+        id="save-failed-alert",
+        is_open=False,
+        color="danger",
+        duration=4000,
+    ),
+    dbc.Row(
+        dbc.Col(
+            dbc.Button(
+                "Save Result!",
+                color="dark",
+                id="save-result-btn",
+                style={"width":"100%"}
+            ), 
+            width=4
+        ),
+        justify="center"
+    ),
+    dbc.Row(
+        dbc.Col(MatchRow(last_5, "Last 5 Games").component(), width=9),
+        justify="center"
+    ),
+])
 
+@app.callback(
+    Output("save-failed-alert", "is_open"),
+    Output("p_char_card", "children"),
+    Output("r_char_card", "children"),
+    Input("save-result-btn", 'n_clicks'),
+    State("Piers-finalstocks", "value"),
+    State("Rory-finalstocks", "value"),
+    State("p_char_card", "children"),
+    State("r_char_card", "children"),
+    prevent_initial_call=True
+)
+def save_match(n, piers_stocks, rory_stocks, p_char, r_char):
+    valid = True
+    if piers_stocks == 0 and rory_stocks == 0:
+        valid = False
+    elif piers_stocks > 0 and rory_stocks > 0:
+        valid = False
 
-def get_rand_char(player, df):
-    random.seed(st.session_state.seed)
-    weights = df['RandWeight'].values
-    n = random.choices(range(0, df.shape[0]), weights=weights, k=1)[0]
-    return df[f'{player} Character'].iloc[n]
+    if valid:
+        results_df = save_results(
+            next_characters["Piers"],
+            next_characters["Rory"],
+            piers_stocks,
+            rory_stocks
+        )
 
-def save_result(new_data, check):
-    if not check: return
-    p_stock = new_data['Piers Stocks'].iloc[0]
-    r_stock = new_data['Rory Stocks'].iloc[0]
+        for player in next_characters.keys():
+            char_df = get_all_character_stats(results_df, player)
+            next_characters[player] = get_next_character(results_df.shape[0], char_df, player)
+        
+        p_char = CharacterCard(next_characters["Piers"], results_df, "Piers").component()
+        r_char = CharacterCard(next_characters["Rory"], results_df, "Rory", False).component()
 
-    if p_stock > 0 and r_stock > 0:
-        st.error("Someone must have lost! Ensure one stock value is at 0")
-    elif p_stock == 0 and r_stock == 0:
-        st.error("Someone must have won! Ensure one stock value is above 0")
-    else:
-        sheet = google_client.open("SSBU Results").sheet1
-        df = get_as_dataframe(sheet)
+    return not valid, p_char, r_char
 
-        dfmerged = pd.concat([df, new_data], ignore_index=True, sort=False)
-        sheet.clear()
-        set_with_dataframe(sheet, dfmerged)
-        get_ssbu_results()
-
-with st.container(border=True):
-    st.title("Next Game")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        p_char = character_block("Piers")
-    with col2:
-        r_char = character_block("Rory", left=False)
-    
-    past_games = results_df[(results_df['Piers Character'] == p_char) & (results_df['Rory Character'] == r_char)]
-
-    if past_games.shape[0] > 0:
-        st.dataframe(results_df[(results_df['Piers Character'] == p_char) & (results_df['Rory Character'] == r_char)])
-    else:
-        st.write("No past games between these two characters")
-    
-with st.form("Next Game", clear_on_submit=True):
-    col1, col2 = st.columns(2)
-    with col1:
-        p_stock = st.number_input("Piers Stocks", step=1, min_value=0, max_value=3)
-    with col2:
-        r_stock = st.number_input("Rory Stocks", step=1, min_value=0, max_value=3)
-
-    new_data = pd.DataFrame({
-        'Piers Character': [p_char],
-        'Rory Character': [r_char],
-        'Piers Stocks': [p_stock],
-        'Rory Stocks': [r_stock],
-        'Winner': ['Piers' if p_stock > 0 else 'Rory'],
-        'Date Played': [datetime.now()]
-    })
-
-    check = st.checkbox("Game Completed?", value=False)
-    st.form_submit_button("Save Result", on_click=save_result(new_data, check))
-
+if __name__ == '__main__':
+    app.run_server(debug=True)
